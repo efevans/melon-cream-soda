@@ -1,0 +1,377 @@
+﻿@page "/canvas"
+@using System.Text.Json
+@using System.Text.Json.Serialization
+@implements IAsyncDisposable
+@inject IJSRuntime JS
+
+<MudStack Row="true" AlignItems="AlignItems.Start" Justify="Justify.FlexStart">
+    <InputFile id="@FileInputId" @ref="InputFileRef" style="display: none;" OnChange="ShowPreview" />
+    <MudFab HtmlTag="label"
+            Color="Color.Primary"
+            StartIcon="@Icons.Material.Filled.Image"
+            Label="Upload Image"
+            Disabled="!AssemblyIsLoaded"
+            for="@FileInputId" />
+    @if (ImageIsUploaded)
+    {
+        <div class="d-flex flex-row gap-2 my-2">
+            <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="HandleSave">Save</MudButton>
+            <MudButton Color="Color.Secondary" Variant="Variant.Filled" OnClick="HandleReset">Reset</MudButton>
+        </div>
+        @if (ShowStretchedImageAlert)
+        {
+            <MudAlert Severity="Severity.Warning" ShowCloseIcon="true" CloseIconClicked="RemoveStretchedImageUploadAlert">Image is large and may display artifacts from scaling</MudAlert>
+        }
+    }
+</MudStack>
+@if (!AssemblyIsLoaded)
+{
+    <div class="d-flex flex-row justify-center" style="min-height: 25rem;">
+        <MudProgressCircular Color="Color.Primary" Indeterminate="true" />
+    </div>
+}
+
+<div style="@(ImageIsUploaded ? "" : "display: none;")">
+    <canvas id="@CleanCanvasId" @ref="CleanCanvasRef" style="display: none;"></canvas>
+    <MudStack Row="true" Style="margin-right: -28rem; margin-left: -28rem;" Class="flex-grow-1 my-2">
+        <div class="d-flex flex-column align-center" style="width: 65%;">
+            <canvas id="@MainCanvasId" @ref="MainCanvasRef" class="flex-grow-0" style="border: 1px solid black;"></canvas>
+        </div>
+        <MudSpacer />
+        <MudStack AlignItems="AlignItems.Start" Justify="Justify.FlexStart" Style="width:30%;">
+            <MudStack Row="true" Spacing="2" Class="flex-wrap">
+                <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="() => { AddEffect(Effect.FloydSteinbergDither); }">Floyd-Steinberg Dither</MudButton>
+                <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="() => { AddEffect(Effect.OrderedDither); }">Ordered Dither</MudButton>
+                <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="() => { AddEffect(Effect.Invert); }">Invert</MudButton>
+                <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="() => { AddEffect(Effect.GammaCorrect); }">Gamma Correction</MudButton>
+                <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="() => { AddEffect(Effect.Pixelate); }">Pixelate</MudButton>
+            </MudStack>
+            <MudDropContainer @ref="EffectsUIListRef" ItemIsDisabled="@((item) => !item.Draggable)" T="EffectItem" Items="Effects" ItemsSelector="@((item,dropzone) => true)" ItemDropped="ItemUpdated" Class="d-flex flex-wrap flex-grow-0 align-start" Style="width: 100%;">
+                <ChildContent>
+                    <MudPaper Class="flex-grow-1">
+                        <MudList Class="d-flex flex-column">
+                            <MudListSubheader>Effects</MudListSubheader>
+                            <MudDivider DividerType="DividerType.Middle" Light="true"></MudDivider>
+                            <MudDropZone T="EffectItem" Identifier="1" Class="flex-grow-1" AllowReorder="true" />
+                        </MudList>
+                    </MudPaper>
+                </ChildContent>
+                <ItemRenderer>
+                    <ArtCanvasEffectListItem EffectItem="@context" OnValueChangedCallback="OnEffectOptionValueChangedCallback" OnDragStateChangedCallback="OnEffectItemDragStateChanged" OnDeleteCallback="OnEffectDeleteCallback"></ArtCanvasEffectListItem>
+                </ItemRenderer>
+            </MudDropContainer>
+        </MudStack>
+    </MudStack>
+</div>
+
+
+@code {
+    private const string MainCanvasId = "tutorial";
+    private const string CleanCanvasId = "clean-canvas";
+    private const string FileInputId = "mud-file-uploader";
+
+    private ElementReference MainCanvasRef { get; set; }
+    private ElementReference CleanCanvasRef { get; set; }
+    private InputFile? InputFileRef { get; set; }
+
+    private Lazy<IJSObjectReference> JSModule = new();
+
+    private bool AssemblyIsLoaded = false;
+    private bool ImageIsUploaded = false;
+    private bool ShowStretchedImageAlert = false;
+
+    private MudDropContainer<EffectItem> EffectsUIListRef { get; set; } = null!;
+
+    private void ItemUpdated(MudItemDropInfo<EffectItem> dropItem)
+    {
+        Effects.ForEach(e => e.Draggable = false);
+        Effects.UpdateOrder(dropItem, item => item.Order);
+        Effects.Sort((e1, e2) => e1.Order > e2.Order ? 1 : -1);
+        ResetImage(MainCanvasId, CleanCanvasId);
+        ApplyEffects();
+    }
+
+    private void OnEffectOptionValueChangedCallback()
+    {
+        Log("ValueChanged callback");
+        ResetImage(MainCanvasId, CleanCanvasId);
+        ApplyEffects();
+    }
+
+    private void OnEffectItemDragStateChanged()
+    {
+        EffectsUIListRef.Refresh();
+    }
+
+    private void OnEffectDeleteCallback(EffectItem item)
+    {
+        Effects.Remove(item);
+        EffectsUIListRef.Refresh();
+        ResetImage(MainCanvasId, CleanCanvasId);
+        ApplyEffects();
+    }
+
+    private List<EffectItem> Effects = new();
+
+    public class EffectItem
+    {
+        public ICanvasEffect Effect { get; init; } = null!;
+        public int Order { get; set; }
+        public bool Draggable { get; set; } = false;
+    }
+
+    private enum Effect
+    {
+        FloydSteinbergDither,
+        Invert,
+        GammaCorrect,
+        Pixelate,
+        OrderedDither
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (OperatingSystem.IsBrowser())
+        {
+            await JSHost.ImportAsync("ArtCanvas",
+                    $"../Pages/ArtCanvas.razor.js");
+            JSModule = new(await JS.InvokeAsync<IJSObjectReference>("import", $"../Pages/ArtCanvas.razor.js"));
+
+            Log("I'm logging from interop!");
+            AssemblyIsLoaded = true;
+        }
+    }
+
+    private async Task ShowPreview(InputFileChangeEventArgs e)
+    {
+        Log("File Uploaded");
+        var streamRef = new DotNetStreamReference(e.File.OpenReadStream(e.File.Size));
+        var json = await JSModule.Value.InvokeAsync<string>("getImageDimensions", streamRef);
+        var dimensions = JsonSerializer.Deserialize<ImageDimensions>(json)!;
+        if (dimensions.Width > 1150)
+        {
+            ShowStretchedImageAlert = true;
+        }
+        ImageIsUploaded = true;
+        Effects.Clear();
+        EffectsUIListRef.Refresh();
+        await JS.InvokeVoidAsync("previewImage", InputFileRef!.Element, MainCanvasRef, CleanCanvasRef);
+    }
+
+    record ImageDimensions(int Width, int Height);
+
+    private void RemoveStretchedImageUploadAlert()
+    {
+        ShowStretchedImageAlert = false;
+    }
+
+    private void HandleSave()
+    {
+        Log("Save File");
+        SaveImage(MainCanvasId);
+    }
+
+    private void HandleReset()
+    {
+        Log("File Reset");
+        Effects.Clear();
+        ResetImage(MainCanvasId, CleanCanvasId);
+        EffectsUIListRef.Refresh();
+    }
+
+    private void ApplyEffect(ICanvasEffect effect)
+    {
+        if (!effect.Enabled)
+        {
+            return;
+        }
+        Log("Applying Effect");
+        effect.Apply(MainCanvasId);
+    }
+
+    private void ApplyEffects()
+    {
+        foreach (var effect in Effects)
+        {
+            ApplyEffect(effect.Effect);
+        }
+    }
+
+    private void AddEffect(Effect effectType, bool apply = true)
+    {
+        var effect = (new CanvasEffectFactory()).CreateFor(effectType, JSModule.Value);
+        Effects.Add(new EffectItem { Effect = effect, Order = Effects.Count });
+        EffectsUIListRef.Refresh();
+
+        if (apply)
+        {
+            ApplyEffect(effect);
+        }
+    }
+
+    private class GenericCanvasEffect(IJSObjectReference jsModule, string name, List<CanvasEffectOption> options, string javascriptMethodName) : ICanvasEffect
+    {
+        private IJSObjectReference JSModule { get; } = jsModule;
+        public string Name => name;
+        public bool Enabled { get; set; } = true;
+        public List<CanvasEffectOption> Options => options;
+        public string JavascriptFunctionName => javascriptMethodName;
+
+        public async Task Apply(string canvasId)
+        {
+            ArtCanvas.Log($"In Apply: {Name}, javascript func: {JavascriptFunctionName}");
+            await JSModule.InvokeVoidAsync(JavascriptFunctionName, canvasId, JsonSerializer.Serialize(ArtCanvas.OptionsListToDictionary(Options)));
+        }
+    }
+
+    public interface ICanvasEffect
+    {
+        public string Name { get; }
+        public bool Enabled { get; set; }
+        public List<CanvasEffectOption> Options { get; }
+        public string JavascriptFunctionName { get; }
+        Task Apply(string canvasId);
+    }
+
+    private class CanvasEffectFactory
+    {
+        public ICanvasEffect CreateFor(Effect effect, IJSObjectReference jsModule)
+        {
+            CanvasEffectBuilder builder = new CanvasEffectBuilder(jsModule);
+
+            switch (effect)
+            {
+                case Effect.FloydSteinbergDither:
+                    return builder
+                        .WithName("FS-Dither")
+                        .WithJavascriptFunctionName("applyFloydSteinbergDither")
+                        .Build();
+
+                case Effect.OrderedDither:
+                    return builder
+                        .WithName("O-Dither")
+                        .WithJavascriptFunctionName("applyOrderedDither")
+                        .WithSliderOption("Strength", "strength", 2, 0, 4, 1)
+                        .WithSliderOption("Color Bits", "colorBits", 1, 1, 8, 1)
+                        .WithCheckboxOption("Grayscale", "grayscale", false)
+                        .Build();
+
+                case Effect.Invert:
+                    return builder
+                        .WithName("Invert")
+                        .WithJavascriptFunctionName("applyInvert")
+                        .Build();
+
+                case Effect.GammaCorrect:
+                    return builder
+                        .WithName("Gamma")
+                        .WithJavascriptFunctionName("applyGammaCorrection")
+                        .Build();
+
+                case Effect.Pixelate:
+                    return builder
+                        .WithName("Pixelate")
+                        .WithJavascriptFunctionName("applyPixelate")
+                        .WithSliderOption("Strength", "strength", 2, 1, 5, 1)
+                        .Build();
+
+                default:
+                    return builder
+                        .WithName("FS-Dither")
+                        .WithJavascriptFunctionName("applyFloydSteinbergDither")
+                        .Build();
+            }
+        }
+    }
+
+    private class CanvasEffectBuilder(IJSObjectReference jsModule)
+    {
+        private IJSObjectReference JSModule { get; } = jsModule;
+        private string Name { get; set; } = String.Empty;
+        private List<CanvasEffectOption> Options { get; set; } = new List<CanvasEffectOption>();
+        private string JavascriptFunctionName { get; set; } = String.Empty;
+
+        public CanvasEffectBuilder WithName(string name)
+        {
+            Name = name;
+            return this;
+        }
+
+        public CanvasEffectBuilder WithJavascriptFunctionName(string javascriptFunctionName)
+        {
+            JavascriptFunctionName = javascriptFunctionName;
+            return this;
+        }
+
+        public CanvasEffectBuilder WithSliderOption(string name, string key, int initialValue, int minValue, int maxValue, int step)
+        {
+            Options.Add(new CanvasEffectOption(name, key, CanvasEffectOptionInputType.Slider, initialValue, minValue, maxValue, step));
+            return this;
+        }
+
+        public CanvasEffectBuilder WithCheckboxOption(string name, string key, bool initialValue)
+        {
+            Options.Add(new CanvasEffectOption(name, key, CanvasEffectOptionInputType.Checkbox, initialValue));
+            return this;
+        }
+
+        public ICanvasEffect Build()
+        {
+            var effect = new GenericCanvasEffect(JSModule, Name, Options, JavascriptFunctionName);
+            Name = String.Empty;
+            Options = new List<CanvasEffectOption>();
+            JavascriptFunctionName = String.Empty;
+
+            return effect;
+        }
+    }
+
+    public class CanvasEffectOption
+    {
+        public CanvasEffectOption(string name, string key, CanvasEffectOptionInputType inputType, int value,
+                                     int minValue, int maxValue, int step)
+        {
+            Name = name;
+            Key = key;
+            InputType = inputType;
+            Value = value;
+            MinValue = minValue;
+            MaxValue = maxValue;
+            Step = step;
+        }
+
+        public CanvasEffectOption(string name, string key, CanvasEffectOptionInputType inputType, bool initialValue)
+        {
+            Name = name;
+            Key = key;
+            InputType = inputType;
+            BinaryValue = initialValue;
+        }
+
+        public string Name { get; } = null!;
+        public string Key { get; } = null!;
+        public CanvasEffectOptionInputType InputType { get; } = CanvasEffectOptionInputType.Slider;
+        public int Value { get; set; }
+        public int MinValue { get; }
+        public int MaxValue { get; }
+        public int Step { get; }
+        public bool BinaryValue { get; set; }
+    }
+
+    [JsonConverter(typeof(JsonStringEnumConverter))]
+    public enum CanvasEffectOptionInputType
+    {
+        Slider,
+        Checkbox
+    }
+
+    private static Dictionary<string, CanvasEffectOption> OptionsListToDictionary(List<CanvasEffectOption> options) => options.ToDictionary(o => o.Key, o => o);
+
+    public async ValueTask DisposeAsync()
+    {
+        if (JSModule.IsValueCreated)
+        {
+            await JSModule.Value.DisposeAsync();
+        }
+    }
+}

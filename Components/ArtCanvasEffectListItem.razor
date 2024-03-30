@@ -1,0 +1,79 @@
+﻿<MudPaper Class="d-flex align-start pl-4 pr-2 pt-4 gap-2 cursor-default" MinHeight="48px" Square="true" Elevation="0">
+    <MudText>@EffectItem.Effect.Name</MudText>
+    <MudStack AlignItems="AlignItems.Start" Justify="Justify.FlexStart" Style="width: 40%;">
+        @foreach (var option in EffectItem.Effect.Options)
+        {
+            <div class="border-separated-list">
+                @if (option.InputType == ArtCanvas.CanvasEffectOptionInputType.Slider)
+                {
+                    <MudSlider ValueChanged="(int val) => { OnValueChanged(option, val); }" Value="@option.Value" Min="@option.MinValue" Max="@option.MaxValue" TickMarks="true" Step="1" ValueLabel="true">@option.Name.ToLower()</MudSlider>
+                }
+                else if (option.InputType == ArtCanvas.CanvasEffectOptionInputType.Checkbox)
+                {
+                    <MudCheckBox ValueChanged="(bool val) => { OnValueChanged(option, val); }" Value="@option.BinaryValue" Label="@option.Name.ToLower()" LabelPosition="LabelPosition.Start" Color="Color.Primary"></MudCheckBox>
+                }
+            </div>
+        }
+    </MudStack>
+    <MudSpacer />
+    <MudCheckBox Dense="true" ValueChanged="(bool val) => { OnEnableToggled(val); }" Value="EffectItem.Effect.Enabled" Class="align-self-start" Color="Color.Dark"></MudCheckBox>
+    <MudIconButton Target="_blank" Icon="@Icons.Material.Filled.DeleteOutline" OnClick="OnDelete" Class="p-1" Color="Color.Secondary" />
+    <MudPaper Elevation="0" Class="mt-1">
+        <MudIcon Size=Size.Small Icon="@Icons.Material.Filled.DragIndicator" Class="ml-2 cursor-grab" @onmousedown="OnHandleMouseDown" @onmouseup="OnHandleMouseUp" Title="Drag" />
+    </MudPaper>
+</MudPaper>
+
+@code {
+    [Parameter]
+    [EditorRequired]
+    public ArtCanvas.EffectItem EffectItem { get; set; } = null!;
+
+    [Parameter]
+    [EditorRequired]
+    public Action OnValueChangedCallback { get; set; } = null!;
+
+    [Parameter]
+    [EditorRequired]
+    public Action OnDragStateChangedCallback { get; set; } = null!;
+
+    [Parameter]
+    [EditorRequired]
+    public Action<ArtCanvas.EffectItem> OnDeleteCallback { get; set; } = null!;
+
+    private bool Enabled { get; set; } = true;
+
+    private void OnEnableToggled(bool newValue)
+    {
+        EffectItem.Effect.Enabled = newValue;
+        OnValueChangedCallback();
+    }
+
+    private void OnDelete()
+    {
+        OnDeleteCallback(EffectItem);
+    }
+
+    private void OnValueChanged(ArtCanvas.CanvasEffectOption option, int newValue)
+    {
+        option.Value = newValue;
+        OnValueChangedCallback();
+    }
+
+    private void OnValueChanged(ArtCanvas.CanvasEffectOption option, bool newValue)
+    {
+        option.BinaryValue = newValue;
+        OnValueChangedCallback();
+    }
+
+    private void OnHandleMouseUp(MouseEventArgs _)
+    {
+        EffectItem.Draggable = false;
+        OnDragStateChangedCallback();
+    }
+
+    private void OnHandleMouseDown(MouseEventArgs _)
+    {
+        EffectItem.Draggable = true;
+        OnDragStateChangedCallback();
+    }
+}

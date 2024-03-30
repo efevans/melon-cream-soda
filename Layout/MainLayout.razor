@@ -1,0 +1,21 @@
+﻿@inherits LayoutComponentBase
+
+<MudThemeProvider />
+<MudDialogProvider />
+<MudSnackbarProvider />
+
+<MudLayout>
+    <MudAppBar Elevation="3" DisableGutters>
+        <MudContainer MaxWidth="MaxWidth.Medium" Class="d-flex flex-row align-content-center ">
+            <MudIconButton Icon="@Icons.Material.Filled.Home" Href="/" Class="p-1 mr-2" Color="Color.Inherit" Edge="Edge.End" />
+            <MudLink Href="/canvas" Typo="Typo.h5" Class="ml-5" Style="@($"color: white !important;")">Canvas</MudLink>
+            <MudSpacer />
+            <MudIconButton Target="_blank" Icon="@Icons.Custom.Brands.GitHub" Href="https://github.com/efevans" Class="p-1" Color="Color.Inherit" Edge="Edge.End" />
+        </MudContainer>
+    </MudAppBar>
+    <MudMainContent>
+        <MudContainer Class="py-4" MaxWidth="MaxWidth.Medium">
+                @Body
+        </MudContainer>
+    </MudMainContent>
+</MudLayout>
