@@ -4,6 +4,6 @@
     border-style: solid;
 }
 
-    div.border-separated-list:last-child {
-        border-width: 0;
-    }
+div.border-separated-list:last-child {
+    border-width: 0;
+}

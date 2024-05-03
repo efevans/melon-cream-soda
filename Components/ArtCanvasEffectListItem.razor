@@ -1,25 +1,45 @@
-﻿<MudPaper Class="d-flex align-start pl-4 pr-2 pt-4 gap-2 cursor-default" MinHeight="48px" Square="true" Elevation="0">
-    <MudText>@EffectItem.Effect.Name</MudText>
+﻿
+<style>
+    .mud-slider > .mud-typography {
+        margin-top: 0px;
+    }
+</style>
+
+<MudPaper Class="d-flex align-start pl-4 pr-2 pt-4 gap-2 cursor-default" MinHeight="48px" Square="true" Elevation="0">
+    <MudText Style="width: 20%;">@EffectItem.Effect.Name</MudText>
     <MudStack AlignItems="AlignItems.Start" Justify="Justify.FlexStart" Style="width: 40%;">
         @foreach (var option in EffectItem.Effect.Options)
         {
             <div class="border-separated-list">
                 @if (option.InputType == ArtCanvas.CanvasEffectOptionInputType.Slider)
                 {
-                    <MudSlider ValueChanged="(int val) => { OnValueChanged(option, val); }" Value="@option.Value" Min="@option.MinValue" Max="@option.MaxValue" TickMarks="true" Step="1" ValueLabel="true">@option.Name.ToLower()</MudSlider>
+                    <MudSlider ValueChanged="(int val) => { OnValueChanged(option, val); }" Value="@option.Value" Min="@option.MinValue" Max="@option.MaxValue" TickMarks="true" Step="1" ValueLabel="true" Immediate="false">@option.Name.ToLower()</MudSlider>
+                }
+                else if (option.InputType == ArtCanvas.CanvasEffectOptionInputType.NumericField)
+                {
+                    <MudNumericField Label="Colors" DebounceInterval="400" ValueChanged="(int val) => { OnValueChanged(option, val); }" Value="@option.Value" Min="@option.MinValue" Max="@option.MaxValue" TickMarks="true" Step="1" ValueLabel="true" Immediate="false">@option.Name.ToLower()</MudNumericField>
                 }
                 else if (option.InputType == ArtCanvas.CanvasEffectOptionInputType.Checkbox)
                 {
-                    <MudCheckBox ValueChanged="(bool val) => { OnValueChanged(option, val); }" Value="@option.BinaryValue" Label="@option.Name.ToLower()" LabelPosition="LabelPosition.Start" Color="Color.Primary"></MudCheckBox>
+                    <MudCheckBox ValueChanged="(bool val) => { OnValueChanged(option, val); }" Value="@option.BinaryValue" Label="@option.Name.ToLower()" LabelPosition="LabelPosition.Start" Color="MudColor.Primary"></MudCheckBox>
+                }
+                else if (option.InputType == ArtCanvas.CanvasEffectOptionInputType.Radio)
+                {
+                    <MudRadioGroup Value="@option.StringValue" ValueChanged="(string val) => { OnValueChanged(option, val); }" T="string">
+                        @foreach (var selectOption in option.SelectOptions)
+                        {
+                            <MudRadio Size="MudSize.Small" Value="@selectOption" Color="MudColor.Primary" UnCheckedColor="MudColor.Default">@selectOption</MudRadio>
+                        }
+                    </MudRadioGroup>
                 }
             </div>
         }
     </MudStack>
     <MudSpacer />
-    <MudCheckBox Dense="true" ValueChanged="(bool val) => { OnEnableToggled(val); }" Value="EffectItem.Effect.Enabled" Class="align-self-start" Color="Color.Dark"></MudCheckBox>
-    <MudIconButton Target="_blank" Icon="@Icons.Material.Filled.DeleteOutline" OnClick="OnDelete" Class="p-1" Color="Color.Secondary" />
+    <MudCheckBox Dense="true" ValueChanged="(bool val) => { OnEnableToggled(val); }" Value="EffectItem.Effect.Enabled" Class="align-self-start" Color="MudColor.Dark"></MudCheckBox>
+    <MudIconButton Target="_blank" Icon="@Icons.Material.Filled.DeleteOutline" OnClick="OnDelete" Class="p-1" Color="MudColor.Secondary" />
     <MudPaper Elevation="0" Class="mt-1">
-        <MudIcon Size=Size.Small Icon="@Icons.Material.Filled.DragIndicator" Class="ml-2 cursor-grab" @onmousedown="OnHandleMouseDown" @onmouseup="OnHandleMouseUp" Title="Drag" />
+        <MudIcon Size=MudSize.Small Icon="@Icons.Material.Filled.DragIndicator" Class="ml-2 cursor-grab" @onmousedown="OnHandleMouseDown" @onmouseup="OnHandleMouseUp" Title="Drag" />
     </MudPaper>
 </MudPaper>
 
@@ -30,7 +50,7 @@
 
     [Parameter]
     [EditorRequired]
-    public Action OnValueChangedCallback { get; set; } = null!;
+    public Action<string> OnValueChangedCallback { get; set; } = null!;
 
     [Parameter]
     [EditorRequired]
@@ -42,10 +62,12 @@
 
     private bool Enabled { get; set; } = true;
 
+    private int ImmediateCallbackCount = 0;
+
     private void OnEnableToggled(bool newValue)
     {
         EffectItem.Effect.Enabled = newValue;
-        OnValueChangedCallback();
+        OnValueChangedCallback("toggle");
     }
 
     private void OnDelete()
@@ -55,14 +77,25 @@
 
     private void OnValueChanged(ArtCanvas.CanvasEffectOption option, int newValue)
     {
+        if (ImmediateCallbackCount > 0)
+        {
+            ImmediateCallbackCount--;
+            return;
+        }
         option.Value = newValue;
-        OnValueChangedCallback();
+        OnValueChangedCallback($"int changed to {newValue}");
+    }
+
+    private void OnValueChanged(ArtCanvas.CanvasEffectOption option, string newValue)
+    {
+        option.StringValue = newValue;
+        OnValueChangedCallback("string changed");
     }
 
     private void OnValueChanged(ArtCanvas.CanvasEffectOption option, bool newValue)
     {
         option.BinaryValue = newValue;
-        OnValueChangedCallback();
+        OnValueChangedCallback("bool changed");
     }
 
     private void OnHandleMouseUp(MouseEventArgs _)
@@ -75,5 +108,11 @@
     {
         EffectItem.Draggable = true;
         OnDragStateChangedCallback();
+    }
+
+    protected override void OnInitialized()
+    {
+        Console.WriteLine($"Has {EffectItem.Effect.Options.Count} options");
+        ImmediateCallbackCount = EffectItem.Effect.Options.Where(o => o.InputType == ArtCanvas.CanvasEffectOptionInputType.Slider).Count();
     }
 }

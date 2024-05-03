@@ -1,13 +1,16 @@
 ﻿@page "/canvas"
 @using System.Text.Json
 @using System.Text.Json.Serialization
+@using System.Diagnostics
 @implements IAsyncDisposable
 @inject IJSRuntime JS
+
+<div>@_drawTime</div>
 
 <MudStack Row="true" AlignItems="AlignItems.Start" Justify="Justify.FlexStart">
     <InputFile id="@FileInputId" @ref="InputFileRef" style="display: none;" OnChange="ShowPreview" />
     <MudFab HtmlTag="label"
-            Color="Color.Primary"
+            Color="MudColor.Primary"
             StartIcon="@Icons.Material.Filled.Image"
             Label="Upload Image"
             Disabled="!AssemblyIsLoaded"
@@ -15,8 +18,8 @@
     @if (ImageIsUploaded)
     {
         <div class="d-flex flex-row gap-2 my-2">
-            <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="HandleSave">Save</MudButton>
-            <MudButton Color="Color.Secondary" Variant="Variant.Filled" OnClick="HandleReset">Reset</MudButton>
+            <MudButton Color="MudColor.Primary" Variant="Variant.Filled" OnClick="HandleSave">Save</MudButton>
+            <MudButton Color="MudColor.Secondary" Variant="Variant.Filled" OnClick="HandleReset">Reset</MudButton>
         </div>
         @if (ShowStretchedImageAlert)
         {
@@ -27,24 +30,24 @@
 @if (!AssemblyIsLoaded)
 {
     <div class="d-flex flex-row justify-center" style="min-height: 25rem;">
-        <MudProgressCircular Color="Color.Primary" Indeterminate="true" />
+        <MudProgressCircular Color="MudColor.Primary" Indeterminate="true" />
     </div>
 }
 
 <div style="@(ImageIsUploaded ? "" : "display: none;")">
     <canvas id="@CleanCanvasId" @ref="CleanCanvasRef" style="display: none;"></canvas>
     <MudStack Row="true" Style="margin-right: -28rem; margin-left: -28rem;" Class="flex-grow-1 my-2">
-        <div class="d-flex flex-column align-center" style="width: 65%;">
+        <div class="d-flex flex-column align-end" style="width: 65%;">
             <canvas id="@MainCanvasId" @ref="MainCanvasRef" class="flex-grow-0" style="border: 1px solid black;"></canvas>
         </div>
         <MudSpacer />
         <MudStack AlignItems="AlignItems.Start" Justify="Justify.FlexStart" Style="width:30%;">
             <MudStack Row="true" Spacing="2" Class="flex-wrap">
-                <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="() => { AddEffect(Effect.FloydSteinbergDither); }">Floyd-Steinberg Dither</MudButton>
-                <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="() => { AddEffect(Effect.OrderedDither); }">Ordered Dither</MudButton>
-                <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="() => { AddEffect(Effect.Invert); }">Invert</MudButton>
-                <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="() => { AddEffect(Effect.GammaCorrect); }">Gamma Correction</MudButton>
-                <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="() => { AddEffect(Effect.Pixelate); }">Pixelate</MudButton>
+                <MudButton Color="MudColor.Primary" Variant="Variant.Filled" OnClick="() => { AddEffect(Effect.FloydSteinbergDither); }">Floyd-Steinberg Dither</MudButton>
+                <MudButton Color="MudColor.Primary" Variant="Variant.Filled" OnClick="() => { AddEffect(Effect.OrderedDither); }">Ordered Dither</MudButton>
+                <MudButton Color="MudColor.Primary" Variant="Variant.Filled" OnClick="() => { AddEffect(Effect.Quantization); }">Quantization</MudButton>
+                <MudButton Color="MudColor.Primary" Variant="Variant.Filled" OnClick="() => { AddEffect(Effect.Invert); }">Invert</MudButton>
+                <MudButton Color="MudColor.Primary" Variant="Variant.Filled" OnClick="() => { AddEffect(Effect.Pixelate); }">Pixelate</MudButton>
             </MudStack>
             <MudDropContainer @ref="EffectsUIListRef" ItemIsDisabled="@((item) => !item.Draggable)" T="EffectItem" Items="Effects" ItemsSelector="@((item,dropzone) => true)" ItemDropped="ItemUpdated" Class="d-flex flex-wrap flex-grow-0 align-start" Style="width: 100%;">
                 <ChildContent>
@@ -70,6 +73,8 @@
     private const string CleanCanvasId = "clean-canvas";
     private const string FileInputId = "mud-file-uploader";
 
+    private long _drawTime = 0;
+
     private ElementReference MainCanvasRef { get; set; }
     private ElementReference CleanCanvasRef { get; set; }
     private InputFile? InputFileRef { get; set; }
@@ -80,6 +85,9 @@
     private bool ImageIsUploaded = false;
     private bool ShowStretchedImageAlert = false;
 
+    private byte[] _cleanImageBytes = null!;
+    private CanvasDimensions _dimensions = null!;
+
     private MudDropContainer<EffectItem> EffectsUIListRef { get; set; } = null!;
 
     private void ItemUpdated(MudItemDropInfo<EffectItem> dropItem)
@@ -87,15 +95,14 @@
         Effects.ForEach(e => e.Draggable = false);
         Effects.UpdateOrder(dropItem, item => item.Order);
         Effects.Sort((e1, e2) => e1.Order > e2.Order ? 1 : -1);
-        ResetImage(MainCanvasId, CleanCanvasId);
-        ApplyEffects();
+        RedrawCanvas();
     }
 
-    private void OnEffectOptionValueChangedCallback()
+    private void OnEffectOptionValueChangedCallback(string msg)
     {
         Log("ValueChanged callback");
-        ResetImage(MainCanvasId, CleanCanvasId);
-        ApplyEffects();
+        Log(msg);
+        RedrawCanvas();
     }
 
     private void OnEffectItemDragStateChanged()
@@ -107,8 +114,23 @@
     {
         Effects.Remove(item);
         EffectsUIListRef.Refresh();
-        ResetImage(MainCanvasId, CleanCanvasId);
-        ApplyEffects();
+        RedrawCanvas();
+    }
+
+    private void RedrawCanvas()
+    {
+        Stopwatch stopwatch = new Stopwatch();
+        stopwatch.Start();
+        // ResetImage(MainCanvasId, CleanCanvasId);
+        Console.WriteLine($"Redrawing Canvas: {Effects.Count} effects");
+        var canvasBytes = _cleanImageBytes.ToArray();
+        Console.WriteLine("Finished Copying clean image bytes");
+        ApplyEffects(canvasBytes);
+        Console.WriteLine("Setting Canvas");
+        SetBytes(MainCanvasId, canvasBytes);
+        stopwatch.Stop();
+        _drawTime = stopwatch.ElapsedMilliseconds;
+        base.StateHasChanged();
     }
 
     private List<EffectItem> Effects = new();
@@ -124,9 +146,9 @@
     {
         FloydSteinbergDither,
         Invert,
-        GammaCorrect,
         Pixelate,
-        OrderedDither
+        OrderedDither,
+        Quantization,
     }
 
     protected override async Task OnInitializedAsync()
@@ -142,23 +164,24 @@
         }
     }
 
+    private record CanvasDimensions(int Width, int Height);
+
     private async Task ShowPreview(InputFileChangeEventArgs e)
     {
         Log("File Uploaded");
         var streamRef = new DotNetStreamReference(e.File.OpenReadStream(e.File.Size));
-        var json = await JSModule.Value.InvokeAsync<string>("getImageDimensions", streamRef);
-        var dimensions = JsonSerializer.Deserialize<ImageDimensions>(json)!;
-        if (dimensions.Width > 1150)
+        await JSModule.Value.InvokeVoidAsync("setImage", streamRef, MainCanvasRef);
+        _cleanImageBytes = GetBytes(MainCanvasId);
+
+        _dimensions = await JSModule.Value.InvokeAsync<CanvasDimensions>("getDimensions", MainCanvasRef);
+        if (_dimensions.Width > 1150)
         {
             ShowStretchedImageAlert = true;
         }
         ImageIsUploaded = true;
         Effects.Clear();
         EffectsUIListRef.Refresh();
-        await JS.InvokeVoidAsync("previewImage", InputFileRef!.Element, MainCanvasRef, CleanCanvasRef);
     }
-
-    record ImageDimensions(int Width, int Height);
 
     private void RemoveStretchedImageUploadAlert()
     {
@@ -175,52 +198,53 @@
     {
         Log("File Reset");
         Effects.Clear();
-        ResetImage(MainCanvasId, CleanCanvasId);
+        SetBytes(MainCanvasId, _cleanImageBytes);
         EffectsUIListRef.Refresh();
     }
 
-    private void ApplyEffect(ICanvasEffect effect)
+    private byte[] ApplyEffect(ICanvasEffect effect, byte[] bytes)
     {
         if (!effect.Enabled)
         {
-            return;
+            return bytes;
         }
         Log("Applying Effect");
-        effect.Apply(MainCanvasId);
+        return effect.Apply(bytes, _dimensions.Width, _dimensions.Height);
     }
 
-    private void ApplyEffects()
+    private void ApplyEffects(byte[] bytes)
     {
         foreach (var effect in Effects)
         {
-            ApplyEffect(effect.Effect);
+            ApplyEffect(effect.Effect, bytes);
         }
     }
 
-    private void AddEffect(Effect effectType, bool apply = true)
+    private void AddEffect(Effect effectType/* , bool apply = true */)
     {
         var effect = (new CanvasEffectFactory()).CreateFor(effectType, JSModule.Value);
         Effects.Add(new EffectItem { Effect = effect, Order = Effects.Count });
         EffectsUIListRef.Refresh();
 
-        if (apply)
-        {
-            ApplyEffect(effect);
-        }
+        // if (apply)
+        // {
+        var canvasBytes = GetBytes(MainCanvasId);
+        canvasBytes = ApplyEffect(effect, canvasBytes);
+        SetBytes(MainCanvasId, canvasBytes);
+        // }
     }
 
-    private class GenericCanvasEffect(IJSObjectReference jsModule, string name, List<CanvasEffectOption> options, string javascriptMethodName) : ICanvasEffect
+    private class GenericCanvasEffect(string name, List<CanvasEffectOption> options, IPostProcesser postProcess) : ICanvasEffect
     {
-        private IJSObjectReference JSModule { get; } = jsModule;
         public string Name => name;
         public bool Enabled { get; set; } = true;
         public List<CanvasEffectOption> Options => options;
-        public string JavascriptFunctionName => javascriptMethodName;
+        private IPostProcesser PostProcess => postProcess;
 
-        public async Task Apply(string canvasId)
+        public byte[] Apply(byte[] bytes, int width, int height)
         {
-            ArtCanvas.Log($"In Apply: {Name}, javascript func: {JavascriptFunctionName}");
-            await JSModule.InvokeVoidAsync(JavascriptFunctionName, canvasId, JsonSerializer.Serialize(ArtCanvas.OptionsListToDictionary(Options)));
+            PostProcess.Process(bytes, width, height, ArtCanvas.OptionsListToDictionary(Options));
+            return bytes;
         }
     }
 
@@ -229,67 +253,68 @@
         public string Name { get; }
         public bool Enabled { get; set; }
         public List<CanvasEffectOption> Options { get; }
-        public string JavascriptFunctionName { get; }
-        Task Apply(string canvasId);
+        byte[] Apply(byte[] bytes, int width, int height);
     }
 
     private class CanvasEffectFactory
     {
         public ICanvasEffect CreateFor(Effect effect, IJSObjectReference jsModule)
         {
-            CanvasEffectBuilder builder = new CanvasEffectBuilder(jsModule);
+            CanvasEffectBuilder builder = new CanvasEffectBuilder();
 
             switch (effect)
             {
                 case Effect.FloydSteinbergDither:
                     return builder
                         .WithName("FS-Dither")
-                        .WithJavascriptFunctionName("applyFloydSteinbergDither")
+                        .WithSliderOption("Color Bits", "colorBits", 1, 1, 8, 1)
+                        .WithCheckboxOption("Grayscale", "grayscale", false)
+                        .WithPostProcess(new FloydSteinbergDitherer())
                         .Build();
 
                 case Effect.OrderedDither:
                     return builder
                         .WithName("O-Dither")
-                        .WithJavascriptFunctionName("applyOrderedDither")
                         .WithSliderOption("Strength", "strength", 2, 0, 4, 1)
                         .WithSliderOption("Color Bits", "colorBits", 1, 1, 8, 1)
                         .WithCheckboxOption("Grayscale", "grayscale", false)
+                        .WithPostProcess(new OrderedDitherer())
                         .Build();
 
                 case Effect.Invert:
                     return builder
                         .WithName("Invert")
-                        .WithJavascriptFunctionName("applyInvert")
-                        .Build();
-
-                case Effect.GammaCorrect:
-                    return builder
-                        .WithName("Gamma")
-                        .WithJavascriptFunctionName("applyGammaCorrection")
+                        .WithPostProcess(new ColorInverter())
                         .Build();
 
                 case Effect.Pixelate:
                     return builder
                         .WithName("Pixelate")
-                        .WithJavascriptFunctionName("applyPixelate")
                         .WithSliderOption("Strength", "strength", 2, 1, 5, 1)
+                        .WithPostProcess(new Pixelater())
+                        .Build();
+
+                case Effect.Quantization:
+                    return builder
+                        .WithName("Quantization")
+                        // .WithSliderOption("Palette Size", "paletteSize", 12, 2, 127, 1)
+                        .WithNumericField("Palette Size", "paletteSize", 12, 2, 127, 1)
+                        .WithPostProcess(new OctreeQuantizer())
                         .Build();
 
                 default:
                     return builder
                         .WithName("FS-Dither")
-                        .WithJavascriptFunctionName("applyFloydSteinbergDither")
                         .Build();
             }
         }
     }
 
-    private class CanvasEffectBuilder(IJSObjectReference jsModule)
+    private class CanvasEffectBuilder()
     {
-        private IJSObjectReference JSModule { get; } = jsModule;
         private string Name { get; set; } = String.Empty;
         private List<CanvasEffectOption> Options { get; set; } = new List<CanvasEffectOption>();
-        private string JavascriptFunctionName { get; set; } = String.Empty;
+        private IPostProcesser PostProcess { get; set; } = new NoOpPostProcessor();
 
         public CanvasEffectBuilder WithName(string name)
         {
@@ -297,9 +322,9 @@
             return this;
         }
 
-        public CanvasEffectBuilder WithJavascriptFunctionName(string javascriptFunctionName)
+        public CanvasEffectBuilder WithPostProcess(IPostProcesser postProcess)
         {
-            JavascriptFunctionName = javascriptFunctionName;
+            PostProcess = postProcess;
             return this;
         }
 
@@ -315,12 +340,24 @@
             return this;
         }
 
+        public CanvasEffectBuilder WithRadioOption(string name, string key, List<string> selectOptions, string defaultValue)
+        {
+            Options.Add(CanvasEffectOption.NewRadioOption(name, key, selectOptions, defaultValue));
+            return this;
+        }
+
+        public CanvasEffectBuilder WithNumericField(string name, string key, int initialValue, int minValue, int maxValue, int step)
+        {
+            Options.Add(new CanvasEffectOption(name, key, CanvasEffectOptionInputType.NumericField, initialValue, minValue, maxValue, step));
+            return this;
+        }
+
         public ICanvasEffect Build()
         {
-            var effect = new GenericCanvasEffect(JSModule, Name, Options, JavascriptFunctionName);
+            var effect = new GenericCanvasEffect(Name, Options, PostProcess);
             Name = String.Empty;
             Options = new List<CanvasEffectOption>();
-            JavascriptFunctionName = String.Empty;
+            PostProcess = new NoOpPostProcessor();
 
             return effect;
         }
@@ -348,21 +385,43 @@
             BinaryValue = initialValue;
         }
 
-        public string Name { get; } = null!;
-        public string Key { get; } = null!;
-        public CanvasEffectOptionInputType InputType { get; } = CanvasEffectOptionInputType.Slider;
+        private CanvasEffectOption()
+        {
+
+        }
+
+        public static CanvasEffectOption NewRadioOption(string name, string key, List<string> values, string defaultValue)
+        {
+            var option = new CanvasEffectOption()
+                {
+                    InputType = CanvasEffectOptionInputType.Radio,
+                    Name = name,
+                    Key = key,
+                    SelectOptions = values,
+                    StringValue = defaultValue,
+                };
+            return option;
+        }
+
+        public string Name { get; private set; } = null!;
+        public string Key { get; private set; } = null!;
+        public CanvasEffectOptionInputType InputType { get; private set; } = CanvasEffectOptionInputType.Slider;
         public int Value { get; set; }
         public int MinValue { get; }
         public int MaxValue { get; }
         public int Step { get; }
         public bool BinaryValue { get; set; }
+        public string? StringValue { get; set; }
+        public List<string>? SelectOptions { get; set; }
     }
 
     [JsonConverter(typeof(JsonStringEnumConverter))]
     public enum CanvasEffectOptionInputType
     {
         Slider,
-        Checkbox
+        Checkbox,
+        Radio,
+        NumericField
     }
 
     private static Dictionary<string, CanvasEffectOption> OptionsListToDictionary(List<CanvasEffectOption> options) => options.ToDictionary(o => o.Key, o => o);
